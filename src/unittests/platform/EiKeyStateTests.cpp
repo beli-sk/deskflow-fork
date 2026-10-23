@@ -10,9 +10,12 @@
 #include "deskflow/AppUtil.h"
 #include "deskflow/KeyTypes.h"
 #include "platform/EiKeyState.h"
+#include "platform/XDGKeyUtil.h"
 
 #include <QByteArray>
 #include <QTemporaryFile>
+
+#include <xkbcommon/xkbcommon.h>
 
 #include <cstdint>
 #include <utility>
@@ -95,6 +98,41 @@ xkb_symbols "test" {
 };)XKB";
 
 constexpr std::uint32_t MenuKeycode = 135;
+
+// A keymap where the right Alt key (xkb keycode 108, evdev 100) is remapped
+// to the compose key, as the xkb option "compose:ralt" would do, together
+// with a left Alt key that generates the (virtual) Alt modifier.
+const char RAltComposeKeymap[] = R"XKB(xkb_keymap {
+xkb_keycodes "test" {
+    minimum = 8;
+    maximum = 255;
+    <LALT> = 64;
+    <RALT> = 108;
+    <AB01> = 38;
+};
+xkb_types "test" {
+    type "ONE_LEVEL" {
+        modifiers = none;
+        level_name[Level1] = "Any";
+    };
+};
+xkb_compat "test" {
+    virtual_modifiers Alt;
+    interpret Alt_L+Any {
+        virtualModifier = Alt;
+        action = SetMods(modifiers=modMapMods);
+    };
+};
+xkb_symbols "test" {
+    key <LALT> { [ Alt_L ] };
+    key <RALT> { [ Multi_key ] };
+    key <AB01> { [ q ] };
+    modifier_map Mod1 { <LALT> };
+};
+};)XKB";
+
+constexpr std::uint32_t LeftAltKeycode = 64;
+constexpr std::uint32_t RAltKeycode = 108;
 
 // An EiKeyState that records the buttons injected via fakeKey() instead of
 // forwarding them to a computer.
@@ -199,6 +237,50 @@ void EiKeyStateTests::getKeyMap_composeKeyOnMenu_aliasesMenuKey()
   QVERIFY2(keyState.fakeKeys.size() == 1, "expected exactly one injected key press");
   QCOMPARE(keyState.fakeKeys[0].first, static_cast<KeyButton>(MenuKeycode - 8));
   QCOMPARE(keyState.fakeKeys[0].second, true);
+}
+
+void EiKeyStateTests::getKeyMap_composeKeyOnRAlt_doesNotSyncAltModifier()
+{
+  TestAppUtil appUtil;
+  EventQueue eventQueue;
+  RecordingEiKeyState keyState(nullptr, &eventQueue);
+
+  QTemporaryFile keymapFile;
+  QVERIFY(keymapFile.open());
+  const QByteArray keymapData = QByteArray::fromRawData(RAltComposeKeymap, sizeof(RAltComposeKeymap) - 1);
+  QCOMPARE(keymapFile.write(keymapData), keymapData.size());
+  QVERIFY(keymapFile.flush());
+  keyState.init(keymapFile.handle(), keymapFile.size());
+
+  keyState.updateKeyMap();
+
+  // The alias KeyID is the stock keysym of the compose keycode, which depends
+  // on the default layout (ISO_Level3_Shift on AltGr layouts, Alt_R
+  // otherwise).  Resolve it the same way EiKeyState does.
+  auto *ctx = xkb_context_new(XKB_CONTEXT_NO_FLAGS);
+  QVERIFY(ctx != nullptr);
+  xkb_rule_names names{};
+  names.options = "";
+  auto *stock = xkb_keymap_new_from_names(ctx, &names, XKB_KEYMAP_COMPILE_NO_FLAGS);
+  QVERIFY(stock != nullptr);
+  const xkb_keysym_t *stockSyms;
+  QVERIFY(xkb_keymap_key_get_syms_by_level(stock, RAltKeycode, 0, 0, &stockSyms) > 0);
+  const auto aliasID = XDGKeyUtil::mapKeySymToKeyID(stockSyms[0]);
+  xkb_keymap_unref(stock);
+  xkb_context_unref(ctx);
+  QVERIFY2(aliasID != kKeyNone && aliasID != kKeyCompose, "expected a usable alias for the compose key");
+
+  // The Windows server sends RAlt as AltGr with the Alt modifier held (its
+  // mask includes VK_RMENU as Alt).  The client must inject only the compose
+  // key press; it must not synthesize a phantom Alt press to match the
+  // server's mask, because apps like Firefox refuse to start a compose
+  // sequence while Alt is held.
+  keyState.fakeKeyDown(aliasID, KeyModifierAlt, 0, "en");
+
+  QVERIFY2(keyState.fakeKeys.size() == 1, "expected exactly one injected key press");
+  QCOMPARE(keyState.fakeKeys[0].first, static_cast<KeyButton>(RAltKeycode - 8));
+  QCOMPARE(keyState.fakeKeys[0].second, true);
+  QVERIFY2(keyState.fakeKeys[0].first != static_cast<KeyButton>(LeftAltKeycode - 8), "phantom Alt must not be pressed");
 }
 
 QTEST_MAIN(EiKeyStateTests)

@@ -47,6 +47,7 @@ public:
     KeyModifierMask m_required{};  //!< Modifiers required for KeyID
     KeyModifierMask m_sensitive{}; //!< Modifiers key is sensitive to
     KeyModifierMask m_generates{}; //!< Modifiers key is mapped to
+    bool m_ignoreDesiredState{};   //!< \c true to not sync the server's modifier mask when pressing this key
     bool m_dead{};                 //!< \c true if this is a dead KeyID
     bool m_lock{};                 //!< \c true if this locks a modifier
     uint32_t m_client{};           //!< Client data

@@ -315,6 +315,14 @@ void EiKeyState::getKeyMap(deskflow::KeyMap &keyMap)
             if (xkb_keymap_key_get_syms_by_level(m_stockKeymap, keycode, group, level, &stockSyms) > 0) {
               const auto stockID = XDGKeyUtil::mapKeySymToKeyID(stockSyms[0]);
               if (stockID != kKeyNone && stockID != kKeyCompose) {
+                // The server may report modifiers in the event mask that the
+                // key itself produces on the server (e.g. Windows sends RAlt
+                // with the Alt modifier held).  This key does not produce
+                // those modifiers on the client, so don't sync the server's
+                // mask; that would inject a phantom modifier press (e.g. Alt)
+                // alongside the compose key, and apps like Firefox refuse to
+                // start a compose sequence while Alt is held.
+                item.m_ignoreDesiredState = true;
                 auto alias = item;
                 alias.m_id = stockID;
                 keyMap.addKeyEntry(alias);

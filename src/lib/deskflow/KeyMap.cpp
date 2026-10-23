@@ -737,22 +737,31 @@ bool KeyMap::keysForKeyItem(
       return false;
     }
 
-    // match desiredState as closely as possible.  we must not
-    // change any modifiers in keyItem.m_sensitive.  and if the key
-    // is a modifier, we don't want to change that modifier.
-    LOG(
-        (CLOG_VERBOSE "desired state: %04x %04x,%04x,%04x", desiredState, currentState, keyItem.m_required,
-         keyItem.m_sensitive)
-    );
-    if (!keysForModifierState(
-            keyItem.m_button, group, activeModifiers, currentState, desiredState, ~(sensitive | keyItem.m_generates),
-            s_notRequiredMask, keystrokes
-        )) {
+    // Match desiredState as closely as possible.  We must not change any
+    // modifiers in keyItem.m_sensitive, and if the key is a modifier we
+    // don't want to change that modifier.
+    //
+    // Some keys opt out of this sync (m_ignoreDesiredState): the server may
+    // report a modifier in the mask that this very key produces on the
+    // server (e.g. Windows sends RAlt with the Alt modifier held), while
+    // the client key does not produce that modifier (e.g. RAlt remapped to
+    // the compose key).  Syncing it would inject a phantom modifier press,
+    // so apps would see the key pressed with an unexpected modifier held.
+    if (!keyItem.m_ignoreDesiredState) {
       LOG(
-          (CLOG_VERBOSE "unable to match desired modifier state (%04x,%04x) for key %d", desiredState,
-           ~keyItem.m_sensitive & 0xffffu, keyItem.m_button)
+          (CLOG_VERBOSE "desired state: %04x %04x,%04x,%04x", desiredState, currentState, keyItem.m_required,
+           keyItem.m_sensitive)
       );
-      return false;
+      if (!keysForModifierState(
+              keyItem.m_button, group, activeModifiers, currentState, desiredState, ~(sensitive | keyItem.m_generates),
+              s_notRequiredMask, keystrokes
+          )) {
+        LOG(
+            (CLOG_VERBOSE "unable to match desired modifier state (%04x,%04x) for key %d", desiredState,
+             ~keyItem.m_sensitive & 0xffffu, keyItem.m_button)
+        );
+        return false;
+      }
     }
 
     // repeat or press of key
