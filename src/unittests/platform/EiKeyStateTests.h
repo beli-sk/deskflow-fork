@@ -21,6 +21,7 @@ private Q_SLOTS:
   void updateLockedModifiers_compositorLockState_numLockFollowsCompositor();
   void getKeyMap_composeKeyOnMenu_aliasesMenuKey();
   void getKeyMap_composeKeyOnRAlt_doesNotSyncAltModifier();
+  void getKeyMap_composeKeyHeld_altMaskNotSyncedForOtherKeys();
 
 private:
   Arch m_arch;

@@ -133,6 +133,32 @@ xkb_symbols "test" {
 
 constexpr std::uint32_t LeftAltKeycode = 64;
 constexpr std::uint32_t RAltKeycode = 108;
+constexpr std::uint32_t AB01Keycode = 38;
+
+// The alias KeyID of the compose key on keycode is the stock keysym of that
+// keycode, which depends on the default layout (ISO_Level3_Shift on AltGr
+// layouts, Alt_R otherwise).
+KeyID composeAliasID(std::uint32_t keycode)
+{
+  auto *ctx = xkb_context_new(XKB_CONTEXT_NO_FLAGS);
+  if (ctx == nullptr) {
+    return kKeyNone;
+  }
+  xkb_rule_names names{};
+  names.options = "";
+  auto *stock = xkb_keymap_new_from_names(ctx, &names, XKB_KEYMAP_COMPILE_NO_FLAGS);
+  if (stock == nullptr) {
+    xkb_context_unref(ctx);
+    return kKeyNone;
+  }
+  const xkb_keysym_t *stockSyms;
+  const auto id = xkb_keymap_key_get_syms_by_level(stock, keycode, 0, 0, &stockSyms) > 0
+                      ? XDGKeyUtil::mapKeySymToKeyID(stockSyms[0])
+                      : kKeyNone;
+  xkb_keymap_unref(stock);
+  xkb_context_unref(ctx);
+  return id;
+}
 
 // An EiKeyState that records the buttons injected via fakeKey() instead of
 // forwarding them to a computer.
@@ -254,20 +280,7 @@ void EiKeyStateTests::getKeyMap_composeKeyOnRAlt_doesNotSyncAltModifier()
 
   keyState.updateKeyMap();
 
-  // The alias KeyID is the stock keysym of the compose keycode, which depends
-  // on the default layout (ISO_Level3_Shift on AltGr layouts, Alt_R
-  // otherwise).  Resolve it the same way EiKeyState does.
-  auto *ctx = xkb_context_new(XKB_CONTEXT_NO_FLAGS);
-  QVERIFY(ctx != nullptr);
-  xkb_rule_names names{};
-  names.options = "";
-  auto *stock = xkb_keymap_new_from_names(ctx, &names, XKB_KEYMAP_COMPILE_NO_FLAGS);
-  QVERIFY(stock != nullptr);
-  const xkb_keysym_t *stockSyms;
-  QVERIFY(xkb_keymap_key_get_syms_by_level(stock, RAltKeycode, 0, 0, &stockSyms) > 0);
-  const auto aliasID = XDGKeyUtil::mapKeySymToKeyID(stockSyms[0]);
-  xkb_keymap_unref(stock);
-  xkb_context_unref(ctx);
+  const auto aliasID = composeAliasID(RAltKeycode);
   QVERIFY2(aliasID != kKeyNone && aliasID != kKeyCompose, "expected a usable alias for the compose key");
 
   // The Windows server sends RAlt as AltGr with the Alt modifier held (its
@@ -281,6 +294,43 @@ void EiKeyStateTests::getKeyMap_composeKeyOnRAlt_doesNotSyncAltModifier()
   QCOMPARE(keyState.fakeKeys[0].first, static_cast<KeyButton>(RAltKeycode - 8));
   QCOMPARE(keyState.fakeKeys[0].second, true);
   QVERIFY2(keyState.fakeKeys[0].first != static_cast<KeyButton>(LeftAltKeycode - 8), "phantom Alt must not be pressed");
+}
+
+void EiKeyStateTests::getKeyMap_composeKeyHeld_altMaskNotSyncedForOtherKeys()
+{
+  TestAppUtil appUtil;
+  EventQueue eventQueue;
+  RecordingEiKeyState keyState(nullptr, &eventQueue);
+
+  QTemporaryFile keymapFile;
+  QVERIFY(keymapFile.open());
+  const QByteArray keymapData = QByteArray::fromRawData(RAltComposeKeymap, sizeof(RAltComposeKeymap) - 1);
+  QCOMPARE(keymapFile.write(keymapData), keymapData.size());
+  QVERIFY(keymapFile.flush());
+  keyState.init(keymapFile.handle(), keymapFile.size());
+
+  keyState.updateKeyMap();
+
+  const auto aliasID = composeAliasID(RAltKeycode);
+  QVERIFY2(aliasID != kKeyNone && aliasID != kKeyCompose, "expected a usable alias for the compose key");
+
+  // The Windows server sends RAlt as AltGr with the Alt modifier held.
+  keyState.fakeKeyDown(aliasID, KeyModifierAlt, 1, "en");
+
+  // When typing fast, the next key of the compose sequence can be pressed
+  // while RAlt is still held on the server, so it arrives with Alt in the
+  // mask.  The client must not synthesize a phantom Alt press for it either.
+  keyState.fakeKeyDown('q', KeyModifierAlt, 2, "en");
+
+  QVERIFY2(keyState.fakeKeys.size() == 2, "expected exactly two injected key presses");
+  QCOMPARE(keyState.fakeKeys[0].first, static_cast<KeyButton>(RAltKeycode - 8));
+  QCOMPARE(keyState.fakeKeys[0].second, true);
+  QCOMPARE(keyState.fakeKeys[1].first, static_cast<KeyButton>(AB01Keycode - 8));
+  QCOMPARE(keyState.fakeKeys[1].second, true);
+  QVERIFY2(
+      keyState.fakeKeys[1].first != static_cast<KeyButton>(LeftAltKeycode - 8),
+      "phantom Alt must not be pressed for keys typed while the compose key is held"
+  );
 }
 
 QTEST_MAIN(EiKeyStateTests)

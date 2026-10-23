@@ -219,6 +219,16 @@ private:
   // otherwise it's the local KeyButton synthesized for the server key.
   KeyButton m_serverKeys[s_numButtons];
 
+  // mask bits the server reported for each held server key that the client
+  // key does not reproduce (e.g. Windows reports RAlt with Alt held while
+  // the client key is a compose key).  these bits are stripped from the
+  // masks of other keys pressed while the server key is held, so no
+  // phantom modifier presses are injected for them.
+  KeyModifierMask m_ignoredServerMasks[s_numButtons];
+
+  // the mask accumulated from all held server keys in m_ignoredServerMasks
+  KeyModifierMask m_ignoredMask;
+
   IEventQueue *m_events;
 
   bool m_isLangSyncEnabled;

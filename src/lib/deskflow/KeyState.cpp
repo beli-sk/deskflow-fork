@@ -678,6 +678,8 @@ void KeyState::init()
   memset(&m_syntheticKeys, 0, sizeof(m_syntheticKeys));
   memset(&m_keyClientData, 0, sizeof(m_keyClientData));
   memset(&m_serverKeys, 0, sizeof(m_serverKeys));
+  memset(&m_ignoredServerMasks, 0, sizeof(m_ignoredServerMasks));
+  m_ignoredMask = 0;
 }
 
 void KeyState::onKey(KeyButton button, bool down, KeyModifierMask newState)
@@ -750,6 +752,8 @@ void KeyState::updateKeyState()
   memset(&m_syntheticKeys, 0, sizeof(m_syntheticKeys));
   memset(&m_keyClientData, 0, sizeof(m_keyClientData));
   memset(&m_serverKeys, 0, sizeof(m_serverKeys));
+  memset(&m_ignoredServerMasks, 0, sizeof(m_ignoredServerMasks));
+  m_ignoredMask = 0;
   m_activeModifiers.clear();
 
   // get the current keyboard state
@@ -808,8 +812,13 @@ void KeyState::fakeKeyDown(KeyID id, KeyModifierMask mask, KeyButton serverID, c
     return;
   }
 
+  // strip mask bits that held keys report on the server but the client does
+  // not reproduce (see m_ignoredServerMasks)
+  mask &= ~m_ignoredMask;
+
   Keystrokes keys;
   ModifierToKeys oldActiveModifiers = m_activeModifiers;
+  const auto stateBeforeMap = m_mask;
   const deskflow::KeyMap::KeyItem *keyItem =
       m_keyMap.mapKey(keys, id, pollActiveGroup(), m_activeModifiers, getActiveModifiersRValue(), mask, false, lang);
 
@@ -835,6 +844,17 @@ void KeyState::fakeKeyDown(KeyID id, KeyModifierMask mask, KeyButton serverID, c
     m_serverKeys[serverID] = localID;
   }
 
+  // remember the mask bits that this key owns on the server but the client
+  // key does not reproduce, so other keys pressed while it is held don't get
+  // phantom modifier presses either.  this is how a compose key remapped
+  // from a modifier (e.g. compose:ralt) is held while the next keys of the
+  // sequence are pressed.
+  if (keyItem->m_ignoreDesiredState) {
+    const auto ownMask = mask & ~stateBeforeMap;
+    m_ignoredServerMasks[serverID] = ownMask;
+    m_ignoredMask |= ownMask;
+  }
+
   // generate key events
   fakeKeys(keys, 1);
 }
@@ -843,6 +863,10 @@ bool KeyState::fakeKeyRepeat(KeyID id, KeyModifierMask mask, int32_t count, KeyB
 {
   LOG_VERBOSE("fakeKeyRepeat");
   serverID &= kButtonMask;
+
+  // strip mask bits that held keys report on the server but the client does
+  // not reproduce (see m_ignoredServerMasks)
+  mask &= ~m_ignoredMask;
 
   // if we haven't seen this button go down then ignore it
   KeyButton oldLocalID = m_serverKeys[serverID];
@@ -904,6 +928,10 @@ bool KeyState::fakeKeyUp(KeyButton serverID)
     return false;
   }
 
+  // this server key no longer contributes mask bits to be ignored
+  m_ignoredMask &= ~m_ignoredServerMasks[serverID & kButtonMask];
+  m_ignoredServerMasks[serverID & kButtonMask] = 0;
+
   // get the sequence of keys to simulate key release
   Keystrokes keys;
   keys.push_back(Keystroke(localID, false, false, m_keyClientData[localID]));
@@ -951,6 +979,8 @@ void KeyState::fakeAllKeysUp()
   }
   fakeKeys(keys, 1);
   memset(&m_serverKeys, 0, sizeof(m_serverKeys));
+  memset(&m_ignoredServerMasks, 0, sizeof(m_ignoredServerMasks));
+  m_ignoredMask = 0;
   m_activeModifiers.clear();
   m_mask = pollActiveModifiers();
 }
